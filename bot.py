@@ -2,20 +2,19 @@ import os
 import sqlite3
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 # ---------------- CONFIG ----------------
-import os
-print("BOT TOKEN =", os.getenv("BOT_TOKEN"))
 BOT_TOKEN = os.getenv("8700904545:AAEPG5zIwwlIPSMklc4QtIKbzJ_-VAizjB4")
 ADMIN_GROUP_ID = -1003967160997
+
+# ---------------- CHECK TOKEN ----------------
+print("BOT STARTING...")
+print("TOKEN:", BOT_TOKEN)
+
+if not BOT_TOKEN:
+    raise Exception("BOT_TOKEN is missing in Railway Variables!")
+
 # ---------------- DATABASE ----------------
 conn = sqlite3.connect("tickets.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -38,112 +37,121 @@ SPAM_DELAY = 5
 
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "مرحباً 👋\nارسل شكواك وسيتم تحويلها للدعم."
-    )
+    await update.message.reply_text("مرحباً 👋\nارسل شكواك وسيتم تحويلها للدعم.")
 
-# ---------------- HANDLE USER MESSAGE ----------------
+# ---------------- HANDLE MESSAGE ----------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    text = update.message.text
-    now = time.time()
+    try:
+        user = update.message.from_user
+        text = update.message.text
+        now = time.time()
 
-    # anti spam
-    if user.id in last_message_time:
-        if now - last_message_time[user.id] < SPAM_DELAY:
-            await update.message.reply_text("🚫 الرجاء عدم الإرسال بسرعة")
+        # anti spam
+        if user.id in last_message_time:
+            if now - last_message_time[user.id] < SPAM_DELAY:
+                await update.message.reply_text("🚫 الرجاء عدم الإرسال بسرعة")
+                return
+        last_message_time[user.id] = now
+
+        # username check
+        if not user.username:
+            await update.message.reply_text("لازم تضيف username في حسابك")
             return
-    last_message_time[user.id] = now
 
-    # username check
-    if not user.username:
-        await update.message.reply_text("لازم تضيف username في حسابك")
-        return
+        # save ticket
+        cursor.execute(
+            "INSERT INTO tickets (user_id, username, message, created_at) VALUES (?, ?, ?, ?)",
+            (user.id, user.username, text, int(now))
+        )
+        conn.commit()
 
-    # save ticket
-    cursor.execute(
-        "INSERT INTO tickets (user_id, username, message, created_at) VALUES (?, ?, ?, ?)",
-        (user.id, user.username, text, int(now))
-    )
-    conn.commit()
+        ticket_id = cursor.lastrowid
 
-    ticket_id = cursor.lastrowid
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📩 رد", callback_data=f"reply_{ticket_id}"),
+                InlineKeyboardButton("❌ إغلاق", callback_data=f"close_{ticket_id}")
+            ]
+        ])
 
-    # buttons
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📩 رد", callback_data=f"reply_{ticket_id}"),
-            InlineKeyboardButton("❌ إغلاق", callback_data=f"close_{ticket_id}")
-        ]
-    ])
-
-    msg = f"""🎫 شكوى جديدة #{ticket_id}
+        msg = f"""🎫 شكوى جديدة #{ticket_id}
 👤 @{user.username}
 🆔 {user.id}
 
 💬 {text}"""
 
-    await context.bot.send_message(
-        chat_id=ADMIN_GROUP_ID,
-        text=msg,
-        reply_markup=keyboard
-    )
+        await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=msg,
+            reply_markup=keyboard
+        )
 
-    await update.message.reply_text(f"تم إرسال شكواك رقم #{ticket_id} 👍")
+        await update.message.reply_text(f"تم إرسال شكواك رقم #{ticket_id} 👍")
+
+    except Exception as e:
+        print("ERROR in handle_message:", e)
 
 # ---------------- CALLBACK ----------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    try:
+        query = update.callback_query
+        await query.answer()
 
-    data = query.data
+        data = query.data
 
-    # close ticket
-    if data.startswith("close_"):
-        ticket_id = int(data.split("_")[1])
+        # close ticket
+        if data.startswith("close_"):
+            ticket_id = int(data.split("_")[1])
 
-        cursor.execute("UPDATE tickets SET status='closed' WHERE ticket_id=?", (ticket_id,))
-        conn.commit()
+            cursor.execute("UPDATE tickets SET status='closed' WHERE ticket_id=?", (ticket_id,))
+            conn.commit()
 
-        await query.edit_message_text(query.message.text + "\n\n✅ تم إغلاق التذكرة")
+            await query.edit_message_text(query.message.text + "\n\n✅ تم إغلاق التذكرة")
 
-    # reply mode
-    elif data.startswith("reply_"):
-        ticket_id = int(data.split("_")[1])
+        # reply mode
+        elif data.startswith("reply_"):
+            ticket_id = int(data.split("_")[1])
 
-        cursor.execute("SELECT user_id FROM tickets WHERE ticket_id=?", (ticket_id,))
-        row = cursor.fetchone()
+            cursor.execute("SELECT user_id FROM tickets WHERE ticket_id=?", (ticket_id,))
+            row = cursor.fetchone()
 
-        if not row:
-            await query.message.reply_text("التذكرة غير موجودة")
-            return
+            if not row:
+                await query.message.reply_text("التذكرة غير موجودة")
+                return
 
-        context.user_data["reply_to"] = row[0]
-        context.user_data["ticket_id"] = ticket_id
+            context.user_data["reply_to"] = row[0]
+            context.user_data["ticket_id"] = ticket_id
 
-        await query.message.reply_text("✍️ اكتب ردك الآن")
+            await query.message.reply_text("✍️ اكتب ردك الآن")
+
+    except Exception as e:
+        print("ERROR in callback:", e)
 
 # ---------------- ADMIN REPLY ----------------
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.chat.id != ADMIN_GROUP_ID:
-        return
+    try:
+        if update.message.chat.id != ADMIN_GROUP_ID:
+            return
 
-    if "reply_to" not in context.user_data:
-        return
+        if "reply_to" not in context.user_data:
+            return
 
-    user_id = context.user_data["reply_to"]
-    ticket_id = context.user_data["ticket_id"]
-    text = update.message.text
+        user_id = context.user_data["reply_to"]
+        ticket_id = context.user_data["ticket_id"]
+        text = update.message.text
 
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=f"📩 رد على شكواك #{ticket_id}:\n\n{text}"
-    )
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"📩 رد على شكواك #{ticket_id}:\n\n{text}"
+        )
 
-    await update.message.reply_text("✅ تم إرسال الرد")
+        await update.message.reply_text("✅ تم إرسال الرد")
 
-    del context.user_data["reply_to"]
-    del context.user_data["ticket_id"]
+        del context.user_data["reply_to"]
+        del context.user_data["ticket_id"]
+
+    except Exception as e:
+        print("ERROR in admin_reply:", e)
 
 # ---------------- APP ----------------
 app = Application.builder().token(BOT_TOKEN).build()
@@ -155,5 +163,5 @@ app.add_handler(MessageHandler(filters.TEXT & filters.Chat(ADMIN_GROUP_ID), admi
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    print("BOT STARTED")
+    print("BOT RUNNING...")
     app.run_polling(drop_pending_updates=True)
