@@ -125,4 +125,6 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CallbackQueryHandler(button_handler))
 app.add_handler(MessageHandler(filters.TEXT & filters.Chat(ADMIN_GROUP_ID), admin_reply))
 
-app.run_polling(drop_pending_updates=True)
+if __name__ == "__main__":
+    print("BOT STARTED")
+    app.run_polling(drop_pending_updates=True, allowed_updates=[])
